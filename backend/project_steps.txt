@@ -15,15 +15,15 @@ Step 2: Draw dynamic rectangle between hands + size check
 * Add text overlay: “📸 SNAPSHOT TAKEN!” for 2 seconds.
 -----Reel: “Watch me create a magic frame with my bare hands”
 
-Step 3: Turn snapshot into 3x3 shuffled puzzle (2–3 hours)
+Step 3: Turn snapshot into 3x3 shuffled puzzle 
 
-Crop the snapshot.
-Split into 9 tiles: use numpy slicing tiles = [original_img[i:i+h//3, j:j+w//3] for i in ...]
-Shuffle the list with random.shuffle(tiles)
-Create a new blank image and paste the shuffled tiles in a 3x3 grid.
-Display this puzzle on top of the live feed (overlay) or in a separate window first.
-Learning: NumPy array slicing + image manipulation.
-Reel: “My face just became a puzzle in 0.5 seconds 😂”
+* Crop the snapshot.
+* Split into 9 tiles: use numpy slicing tiles = [original_img[i:i+h//3, j:j+w//3] for i in ...]
+* Shuffle the list with random.shuffle(tiles)
+* Create a new blank image and paste the shuffled tiles in a 3x3 grid.
+* Display this puzzle on top of the live feed (overlay) or in a separate window first.
+* Learning: NumPy array slicing + image manipulation.
+----Reel: “My face just became a puzzle in 0.5 seconds 😂”
 
 Step 4: Detect pinch gesture (index + thumb close) (2 hours)
 

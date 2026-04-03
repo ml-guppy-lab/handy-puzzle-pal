@@ -1,6 +1,7 @@
 
 import os
 import urllib
+import random
 
 import cv2
 import mediapipe as mp
@@ -73,6 +74,7 @@ original_img = None          # Stores the cropped snapshot
 snapshot_timer = 0           # cv2.getTickCount() timestamp of last snapshot
 SNAPSHOT_DISPLAY_TICKS = int(cv2.getTickFrequency() * 2)  # 2 seconds in ticks
 frozen_square = None         # (x1, y1, x2, y2) locked after snapshot
+puzzle_img = None            # Shuffled 3x3 puzzle image
 
 # ============================================================================
 # STEP 3: Helper Functions (Finger Detection)
@@ -117,6 +119,31 @@ def get_bounding_rect(all_hand_landmarks, frame_w, frame_h):
     ys = [int(lm.y * frame_h) for hand in all_hand_landmarks for lm in hand]
     return min(xs), min(ys), max(xs), max(ys)
 
+def make_puzzle(img):
+    """Split img into a 3x3 grid, shuffle tiles, return assembled puzzle image."""
+    # Resize to a multiple of 3 to ensure clean equal tiles
+    size = 300  # 300x300 → each tile is 100x100
+    img_sq = cv2.resize(img, (size, size))
+    tile_size = size // 3
+
+    # Slice into 9 tiles (row-major order)
+    tiles = [
+        img_sq[r * tile_size:(r + 1) * tile_size,
+               c * tile_size:(c + 1) * tile_size]
+        for r in range(3)
+        for c in range(3)
+    ]
+
+    random.shuffle(tiles)
+
+    # Assemble shuffled tiles back into a 3x3 grid
+    rows = [
+        np.hstack(tiles[r * 3:(r + 1) * 3])
+        for r in range(3)
+    ]
+    puzzle = np.vstack(rows)
+    return puzzle
+
 # ============================================================================
 # STEP 4: Main Loop
 # ============================================================================
@@ -138,29 +165,34 @@ while True:
     # Detect hands
     detection_result = detector.detect(mp_image)
 
-    # Draw landmarks on both hands
+    # ── STEP 2: Puzzle overlay (always rendered if snapshot exists) ──────────
+    if frozen_square is not None:
+        # Paste puzzle onto frame unconditionally — stays regardless of hand state
+        x1, y1, x2, y2 = frozen_square
+        side_w, side_h = x2 - x1, y2 - y1
+        puzzle_resized = cv2.resize(puzzle_img, (side_w, side_h))
+        frame[y1:y2, x1:x2] = puzzle_resized
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+
+    # Draw landmarks on both hands (always on top of puzzle)
     if detection_result.hand_landmarks:
         for hand_landmarks in detection_result.hand_landmarks:
             draw_hand_landmarks(frame, hand_landmarks)
 
-    # Check magic condition
-    if are_both_hands_fully_open(detection_result):
-        cv2.putText(frame, "BOTH HANDS OPEN!",
-                    (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 4)
+    # ── Hand gesture UI (only when no snapshot yet) ───────────────────────
+    if frozen_square is None:
+        if are_both_hands_fully_open(detection_result):
+            cv2.putText(frame, "BOTH HANDS OPEN!",
+                        (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 4)
 
-        # ── STEP 2: Dynamic square + snapshot ───────────────────────────────
-        h, w = frame.shape[:2]
-        screen_area = w * h
+            h, w = frame.shape[:2]
+            screen_area = w * h
 
-        if frozen_square is None:
-            # Square still tracks hands
             x1, y1, x2, y2 = get_bounding_rect(detection_result.hand_landmarks, w, h)
 
-            # Clamp to frame boundaries
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w - 1, x2), min(h - 1, y2)
 
-            # Make it a square using the larger dimension
             rect_w, rect_h = x2 - x1, y2 - y1
             side = max(rect_w, rect_h)
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
@@ -170,27 +202,21 @@ while True:
             y2 = min(h - 1, y1 + side)
             rect_area = (x2 - x1) * (y2 - y1)
 
-            # Draw the live square
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 3)
 
-            # Show live area percentage
             pct = rect_area / screen_area * 100
             cv2.putText(frame, f"Area: {pct:.1f}%  (need >= 40%)",
                         (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
-            # Trigger snapshot when box covers >= 40% of screen
             if rect_area >= 0.4 * screen_area:
                 original_img = frame[y1:y2, x1:x2].copy()
                 frozen_square = (x1, y1, x2, y2)
                 snapshot_timer = cv2.getTickCount()
+                puzzle_img = make_puzzle(original_img)
                 print(f"Snapshot taken! Crop size: {original_img.shape[1]}x{original_img.shape[0]}")
         else:
-            # Square is frozen — draw it at the locked position
-            x1, y1, x2, y2 = frozen_square
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-    else:
-        cv2.putText(frame, "Show both hands fully open",
-                    (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(frame, "Show both hands fully open",
+                        (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
     # Show snapshot overlay for 2 seconds after capture
     if snapshot_timer and (cv2.getTickCount() - snapshot_timer) < SNAPSHOT_DISPLAY_TICKS:
@@ -198,11 +224,25 @@ while True:
                     (50, frame.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX,
                     1.5, (0, 255, 0), 4)
 
+    # Remind user how to reset once puzzle is showing
+    if frozen_square is not None:
+        cv2.putText(frame, "SPACE to reset",
+                    (50, frame.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8, (200, 200, 200), 2)
+
     # Show the frame
     cv2.imshow("Handy Puzzle Pal - Step 0 | The ML Guppy", frame)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
         break
+    elif key == ord(' '):
+        # Reset everything — start fresh
+        original_img = None
+        frozen_square = None
+        puzzle_img = None
+        snapshot_timer = 0
+        print("Reset! Show both hands again.")
 
 # ============================================================================
 # Cleanup
