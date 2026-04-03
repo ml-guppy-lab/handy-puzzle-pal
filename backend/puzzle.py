@@ -74,7 +74,12 @@ original_img = None          # Stores the cropped snapshot
 snapshot_timer = 0           # cv2.getTickCount() timestamp of last snapshot
 SNAPSHOT_DISPLAY_TICKS = int(cv2.getTickFrequency() * 2)  # 2 seconds in ticks
 frozen_square = None         # (x1, y1, x2, y2) locked after snapshot
-puzzle_img = None            # Shuffled 3x3 puzzle image
+tiles = None                 # List of 9 tile images (fixed after snapshot)
+grid = None                  # grid[cell] = tile_idx currently in that cell
+selected_cell = None         # Cell the dragged tile was picked from
+selected_tile_idx = None     # Index of the tile currently being dragged
+drag_pos = None              # Current pixel (x, y) of dragged tile centre
+was_pinching = False         # Pinch state from the previous frame
 
 # ============================================================================
 # STEP 3: Helper Functions (Finger Detection)
@@ -129,30 +134,37 @@ def get_pinch(hand_landmarks, frame_w, frame_h, threshold=30):
     mid = ((tx + ix) // 2, (ty + iy) // 2)
     return dist < threshold, mid
 
+def pixel_to_cell(px, py, x1, y1, x2, y2):
+    """Map pixel (px, py) to 0-8 grid cell index. Returns None if outside puzzle."""
+    cell_w = (x2 - x1) // 3
+    cell_h = (y2 - y1) // 3
+    col = (px - x1) // cell_w
+    row = (py - y1) // cell_h
+    if 0 <= row < 3 and 0 <= col < 3:
+        return int(row) * 3 + int(col)
+    return None
+
 def make_puzzle(img):
-    """Split img into a 3x3 grid, shuffle tiles, return assembled puzzle image."""
-    # Resize to a multiple of 3 to ensure clean equal tiles
+    """Split img into a 3x3 grid. Return (tiles, grid).
+    tiles[i] = fixed image of tile i.
+    grid[cell] = which tile_idx is currently in that cell (shuffled).
+    """
     size = 300  # 300x300 → each tile is 100x100
     img_sq = cv2.resize(img, (size, size))
     tile_size = size // 3
 
-    # Slice into 9 tiles (row-major order)
+    # Slice into 9 independent tile images
     tiles = [
         img_sq[r * tile_size:(r + 1) * tile_size,
-               c * tile_size:(c + 1) * tile_size]
+               c * tile_size:(c + 1) * tile_size].copy()
         for r in range(3)
         for c in range(3)
     ]
 
-    random.shuffle(tiles)
-
-    # Assemble shuffled tiles back into a 3x3 grid
-    rows = [
-        np.hstack(tiles[r * 3:(r + 1) * 3])
-        for r in range(3)
-    ]
-    puzzle = np.vstack(rows)
-    return puzzle
+    # Shuffle which tile goes in which cell
+    grid = list(range(9))
+    random.shuffle(grid)
+    return tiles, grid
 
 # ============================================================================
 # STEP 4: Main Loop
@@ -179,14 +191,25 @@ while True:
     if frozen_square is not None and detection_result.hand_landmarks:
         detection_result.hand_landmarks[:] = detection_result.hand_landmarks[:1]
 
-    # ── STEP 2: Puzzle overlay (always rendered if snapshot exists) ──────────
-    if frozen_square is not None:
-        # Paste puzzle onto frame unconditionally — stays regardless of hand state
+    # ── STEP 2: Puzzle grid (tile-by-tile, always rendered after snapshot) ────
+    if frozen_square is not None and tiles is not None:
         x1, y1, x2, y2 = frozen_square
-        side_w, side_h = x2 - x1, y2 - y1
-        puzzle_resized = cv2.resize(puzzle_img, (side_w, side_h))
-        frame[y1:y2, x1:x2] = puzzle_resized
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+        cell_w = (x2 - x1) // 3
+        cell_h = (y2 - y1) // 3
+        for cell in range(9):
+            row, col = divmod(cell, 3)
+            cx = x1 + col * cell_w
+            cy = y1 + row * cell_h
+            tile_idx = grid[cell]
+            if tile_idx is not None:
+                frame[cy:cy + cell_h, cx:cx + cell_w] = cv2.resize(tiles[tile_idx], (cell_w, cell_h))
+            else:
+                # Empty cell — dark placeholder while tile is being dragged
+                frame[cy:cy + cell_h, cx:cx + cell_w] = 20
+            cv2.rectangle(frame, (cx, cy), (cx + cell_w, cy + cell_h), (0, 255, 0), 1)
+            if tile_idx is not None:
+                cv2.putText(frame, str(tile_idx + 1), (cx + 8, cy + 24),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
     # Draw landmarks on both hands (always on top of puzzle)
     if detection_result.hand_landmarks:
@@ -194,13 +217,64 @@ while True:
         h, w = frame.shape[:2]
         for hand_landmarks in detection_result.hand_landmarks:
             draw_hand_landmarks(frame, hand_landmarks, landmark_color)
+
             # ── STEP 4: Pinch detection ──────────────────────────────────────
             is_pinching, mid = get_pinch(hand_landmarks, w, h)
             if is_pinching:
-                cv2.circle(frame, mid, 16, (0, 255, 255), -1)   # filled yellow dot
-                cv2.circle(frame, mid, 18, (0, 180, 180), 2)    # teal outline
+                cv2.circle(frame, mid, 16, (0, 255, 255), -1)
+                cv2.circle(frame, mid, 18, (0, 180, 180), 2)
                 cv2.putText(frame, "PINCH", (mid[0] + 20, mid[1] - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+            # ── STEP 5: Drag-drop logic ──────────────────────────────────────
+            if frozen_square is not None:
+                ix = int(hand_landmarks[8].x * w)
+                iy = int(hand_landmarks[8].y * h)
+
+                if is_pinching and not was_pinching:
+                    # Pinch start — pick up tile under index finger
+                    cell = pixel_to_cell(ix, iy, *frozen_square)
+                    if cell is not None and grid[cell] is not None:
+                        selected_cell = cell
+                        selected_tile_idx = grid[cell]
+                        grid[cell] = None
+                        drag_pos = (ix, iy)
+
+                elif is_pinching and was_pinching:
+                    # Dragging — follow index finger
+                    drag_pos = (ix, iy)
+
+                elif not is_pinching and was_pinching:
+                    # Pinch released — drop tile
+                    if selected_cell is not None:
+                        target_cell = pixel_to_cell(ix, iy, *frozen_square)
+                        if target_cell is None or target_cell == selected_cell:
+                            # Out of bounds or same cell — put back
+                            grid[selected_cell] = selected_tile_idx
+                        else:
+                            # Swap with target cell
+                            displaced = grid[target_cell]
+                            grid[target_cell] = selected_tile_idx
+                            grid[selected_cell] = displaced
+                        selected_cell = None
+                        selected_tile_idx = None
+                        drag_pos = None
+
+            was_pinching = is_pinching
+
+    # Draw dragged tile floating at index finger (on top of everything)
+    if drag_pos is not None and selected_tile_idx is not None and frozen_square is not None:
+        x1, y1, x2, y2 = frozen_square
+        cell_w = (x2 - x1) // 3
+        cell_h = (y2 - y1) // 3
+        fh, fw = frame.shape[:2]
+        tile = cv2.resize(tiles[selected_tile_idx], (cell_w, cell_h))
+        dx = max(0, min(fw - cell_w, drag_pos[0] - cell_w // 2))
+        dy = max(0, min(fh - cell_h, drag_pos[1] - cell_h // 2))
+        frame[dy:dy + cell_h, dx:dx + cell_w] = tile
+        cv2.rectangle(frame, (dx, dy), (dx + cell_w, dy + cell_h), (0, 255, 255), 2)
+        cv2.putText(frame, str(selected_tile_idx + 1), (dx + 8, dy + 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
     # ── Hand gesture UI (only when no snapshot yet) ───────────────────────
     if frozen_square is None:
@@ -235,7 +309,7 @@ while True:
                 original_img = frame[y1:y2, x1:x2].copy()
                 frozen_square = (x1, y1, x2, y2)
                 snapshot_timer = cv2.getTickCount()
-                puzzle_img = make_puzzle(original_img)
+                tiles, grid = make_puzzle(original_img)
                 print(f"Snapshot taken! Crop size: {original_img.shape[1]}x{original_img.shape[0]}")
         else:
             cv2.putText(frame, "Show both hands fully open",
@@ -263,7 +337,12 @@ while True:
         # Reset everything — start fresh
         original_img = None
         frozen_square = None
-        puzzle_img = None
+        tiles = None
+        grid = None
+        selected_cell = None
+        selected_tile_idx = None
+        drag_pos = None
+        was_pinching = False
         snapshot_timer = 0
         print("Reset! Show both hands again.")
 
