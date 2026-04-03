@@ -175,6 +175,10 @@ while True:
     # Detect hands
     detection_result = detector.detect(mp_image)
 
+    # After snapshot: limit to 1 hand for pinch-drag
+    if frozen_square is not None and detection_result.hand_landmarks:
+        detection_result.hand_landmarks[:] = detection_result.hand_landmarks[:1]
+
     # ── STEP 2: Puzzle overlay (always rendered if snapshot exists) ──────────
     if frozen_square is not None:
         # Paste puzzle onto frame unconditionally — stays regardless of hand state

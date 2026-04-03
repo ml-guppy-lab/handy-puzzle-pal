@@ -34,15 +34,15 @@ Step 4: Detect pinch gesture (index + thumb close) (2 hours)
 
 Step 5: Build drag-and-drop puzzle logic (3–4 hours – the fun part)
 
-Keep the 3x3 grid as a list of tiles + their current positions.
-When pinch is detected:
-Map hand position (use index finger tip) to the nearest grid cell.
-“Pick up” that tile (store it in a selected_tile variable).
-While pinched, move the tile with your hand (draw it at current hand position).
-When pinch released → drop into the nearest empty cell (swap logic).
+* Keep the 3x3 grid as a list of tiles + their current positions.
+* When pinch is detected:
+    - Map hand position (use index finger tip) to the nearest grid cell.
+    - “Pick up” that tile (store it in a selected_tile variable).
+    - While pinched, move the tile with your hand (draw it at current hand position).
+    - When pinch released → drop into the nearest empty cell (swap logic).
 
-Draw the entire puzzle every frame with cv2 rectangles + cv2.putText for numbers 1-9 (for debugging).
-Learning: State machine (idle → selecting → dragging → dropping) + coordinate mapping.
+* Draw the entire puzzle every frame with cv2 rectangles + cv2.putText for numbers 1-9 (for debugging).
+* Learning: State machine (idle → selecting → dragging → dropping) + coordinate mapping.
 Pro tip: Start with mouse first (for testing), then replace mouse coords with hand coords.
 
 Step 6: Solve check + celebration (1 hour)
