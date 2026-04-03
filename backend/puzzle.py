@@ -80,6 +80,8 @@ selected_cell = None         # Cell the dragged tile was picked from
 selected_tile_idx = None     # Index of the tile currently being dragged
 drag_pos = None              # Current pixel (x, y) of dragged tile centre
 was_pinching = False         # Pinch state from the previous frame
+is_solved = False             # True once puzzle is in correct order
+confetti = []                 # List of active confetti particles
 
 # ============================================================================
 # STEP 3: Helper Functions (Finger Detection)
@@ -143,6 +145,26 @@ def pixel_to_cell(px, py, x1, y1, x2, y2):
     if 0 <= row < 3 and 0 <= col < 3:
         return int(row) * 3 + int(col)
     return None
+
+def is_puzzle_solved(grid):
+    """True when every tile is back in its original cell."""
+    return grid is not None and grid == list(range(9))
+
+def spawn_confetti(frame_w, frame_h, n=80):
+    """Create n confetti particles with random pos, velocity, color."""
+    particles = []
+    for _ in range(n):
+        particles.append([
+            random.randint(0, frame_w),          # x
+            random.randint(-frame_h, 0),         # y  (start above screen)
+            random.uniform(-3, 3),               # vx
+            random.uniform(4, 9),                # vy (falling down)
+            (random.randint(50, 255),
+             random.randint(50, 255),
+             random.randint(50, 255)),            # color
+            random.randint(5, 12),               # radius
+        ])
+    return particles
 
 def make_puzzle(img):
     """Split img into a 3x3 grid. Return (tiles, grid).
@@ -315,6 +337,35 @@ while True:
             cv2.putText(frame, "Show both hands fully open",
                         (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
+    # ── STEP 6: Solve check ───────────────────────────────────────────────
+    if frozen_square is not None and not is_solved and is_puzzle_solved(grid):
+        is_solved = True
+        fh, fw = frame.shape[:2]
+        confetti[:] = spawn_confetti(fw, fh)
+
+    # ── Confetti animation ────────────────────────────────────────────────
+    if is_solved:
+        fh, fw = frame.shape[:2]
+        for p in confetti:
+            p[0] += p[2]                         # x += vx
+            p[1] += p[3]                         # y += vy
+            p[3] += 0.25                         # gravity
+            if p[1] > fh:                        # wrap back to top
+                p[0] = random.randint(0, fw)
+                p[1] = random.randint(-100, -10)
+                p[3] = random.uniform(4, 9)
+            cv2.circle(frame, (int(p[0]), int(p[1])), p[5], p[4], -1)
+
+        # Solved banner
+        banner = "SOLVED! You're a genius!"
+        (tw, th), _ = cv2.getTextSize(banner, cv2.FONT_HERSHEY_SIMPLEX, 1.4, 4)
+        bx = (frame.shape[1] - tw) // 2
+        by = frame.shape[0] // 2
+        cv2.rectangle(frame, (bx - 16, by - th - 16), (bx + tw + 16, by + 16),
+                      (0, 0, 0), -1)
+        cv2.putText(frame, banner, (bx, by),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 255, 80), 4)
+
     # Show snapshot overlay for 2 seconds after capture
     if snapshot_timer and (cv2.getTickCount() - snapshot_timer) < SNAPSHOT_DISPLAY_TICKS:
         cv2.putText(frame, "SNAPSHOT TAKEN!",
@@ -343,6 +394,8 @@ while True:
         selected_tile_idx = None
         drag_pos = None
         was_pinching = False
+        is_solved = False
+        confetti.clear()
         snapshot_timer = 0
         print("Reset! Show both hands again.")
 

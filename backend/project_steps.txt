@@ -47,10 +47,9 @@ Pro tip: Start with mouse first (for testing), then replace mouse coords with ha
 
 Step 6: Solve check + celebration (1 hour)
 
-Compare current tile arrangement with original solved order.
-If matched → show big green “🎉 SOLVED! You’re a genius!” + confetti (simple circles flying with cv2).
-Then hands.close() to stop detection.
-Reel ending: slow-mo celebration + text “From .NET dev to hand-magic AI engineer in one project”
+* Compare current tile arrangement with original solved order.
+* If matched → show big green “🎉 SOLVED! You’re a genius!” + confetti (simple circles flying with cv2).
+----Reel ending: slow-mo celebration + text “From .NET dev to hand-magic AI engineer in one project”
 
 Step 7: Polish & Make it Reel-Ready (2 hours)
 
