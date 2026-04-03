@@ -1,0 +1,212 @@
+
+import os
+import urllib
+
+import cv2
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+import numpy as np
+
+# Hand connection pairs (MediaPipe standard)
+HAND_CONNECTIONS = [
+    (0,1),(1,2),(2,3),(3,4),          # Thumb
+    (0,5),(5,6),(6,7),(7,8),          # Index
+    (0,9),(9,10),(10,11),(11,12),     # Middle
+    (0,13),(13,14),(14,15),(15,16),   # Ring
+    (0,17),(17,18),(18,19),(19,20),   # Pinky
+    (5,9),(9,13),(13,17),             # Palm
+]
+
+def draw_hand_landmarks(frame, hand_landmarks):
+    """Draw hand skeleton on frame using OpenCV."""
+    h, w = frame.shape[:2]
+    pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
+    for a, b in HAND_CONNECTIONS:
+        cv2.line(frame, pts[a], pts[b], (0, 200, 255), 2)
+    for x, y in pts:
+        cv2.circle(frame, (x, y), 4, (255, 255, 255), -1)
+        cv2.circle(frame, (x, y), 4, (0, 150, 200), 1)
+
+# ============================================================================
+# Initialize Video Capture
+# ============================================================================
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Failed to open camera. Check permissions.")
+    exit(1)
+
+ret, frame = cap.read()
+if ret:
+    frame_h, frame_w, _ = frame.shape
+else:
+    print("Failed to read frame")
+    exit(1)
+
+# ============================================================================
+# Configure MediaPipe Hand Landmarker (Modern Tasks API)
+# ============================================================================
+# Download the model once: https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+# Place it in the same folder as this script
+MODEL_PATH = 'hand_landmarker.task'
+if not os.path.exists(MODEL_PATH):
+    print("Downloading hand detection model (one-time setup)...")
+    MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
+    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)   # downloads the file and saves it locally
+    print("Model downloaded successfully!")
+base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
+
+options = vision.HandLandmarkerOptions(
+    base_options=base_options,
+    num_hands=2,                          # Important: Track BOTH hands
+    min_hand_detection_confidence=0.7,
+    min_hand_presence_confidence=0.7,
+    min_tracking_confidence=0.7
+)
+
+detector = vision.HandLandmarker.create_from_options(options)
+
+# ============================================================================
+# STEP 2: Rectangle + Snapshot State
+# ============================================================================
+original_img = None          # Stores the cropped snapshot
+snapshot_timer = 0           # cv2.getTickCount() timestamp of last snapshot
+SNAPSHOT_DISPLAY_TICKS = int(cv2.getTickFrequency() * 2)  # 2 seconds in ticks
+frozen_square = None         # (x1, y1, x2, y2) locked after snapshot
+
+# ============================================================================
+# STEP 3: Helper Functions (Finger Detection)
+# ============================================================================
+def is_finger_up(landmarks, tip_idx, pip_idx):
+    """True if finger tip is higher (smaller y) than PIP joint"""
+    return landmarks[tip_idx].y < landmarks[pip_idx].y
+
+def count_open_fingers(hand_landmarks):
+    """Count how many fingers are open (0 to 5)"""
+    if not hand_landmarks:
+        return 0
+    
+    # Landmark indices: tip and pip for each finger
+    fingers = [
+        (8, 6),   # Index
+        (12, 10), # Middle
+        (16, 14), # Ring
+        (20, 18), # Pinky
+        (4, 3)    # Thumb (slightly different logic, but this works well)
+    ]
+    
+    open_count = 0
+    for tip, pip in fingers:
+        if is_finger_up(hand_landmarks, tip, pip):
+            open_count += 1
+    return open_count
+
+def are_both_hands_fully_open(detection_result):
+    """Check if we have exactly 2 hands and both have all 5 fingers open"""
+    if not detection_result.hand_landmarks or len(detection_result.hand_landmarks) != 2:
+        return False
+    
+    for hand_lm in detection_result.hand_landmarks:
+        if count_open_fingers(hand_lm) != 5:
+            return False
+    return True
+
+def get_bounding_rect(all_hand_landmarks, frame_w, frame_h):
+    """Return (x1, y1, x2, y2) bounding box covering all landmarks of all hands."""
+    xs = [int(lm.x * frame_w) for hand in all_hand_landmarks for lm in hand]
+    ys = [int(lm.y * frame_h) for hand in all_hand_landmarks for lm in hand]
+    return min(xs), min(ys), max(xs), max(ys)
+
+# ============================================================================
+# STEP 4: Main Loop
+# ============================================================================
+print("="*70)
+print("Handy Puzzle Pal - Step 0")
+print("Show BOTH hands with ALL fingers open → Magic starts!")
+print("Press 'q' to quit")
+print("="*70)
+
+while True:
+    ok, frame = cap.read()
+    if not ok:
+        break
+
+    frame = cv2.flip(frame, 1)  # Mirror for natural feel
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+    # Detect hands
+    detection_result = detector.detect(mp_image)
+
+    # Draw landmarks on both hands
+    if detection_result.hand_landmarks:
+        for hand_landmarks in detection_result.hand_landmarks:
+            draw_hand_landmarks(frame, hand_landmarks)
+
+    # Check magic condition
+    if are_both_hands_fully_open(detection_result):
+        cv2.putText(frame, "BOTH HANDS OPEN!",
+                    (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 4)
+
+        # ── STEP 2: Dynamic square + snapshot ───────────────────────────────
+        h, w = frame.shape[:2]
+        screen_area = w * h
+
+        if frozen_square is None:
+            # Square still tracks hands
+            x1, y1, x2, y2 = get_bounding_rect(detection_result.hand_landmarks, w, h)
+
+            # Clamp to frame boundaries
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w - 1, x2), min(h - 1, y2)
+
+            # Make it a square using the larger dimension
+            rect_w, rect_h = x2 - x1, y2 - y1
+            side = max(rect_w, rect_h)
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            x1 = max(0, cx - side // 2)
+            y1 = max(0, cy - side // 2)
+            x2 = min(w - 1, x1 + side)
+            y2 = min(h - 1, y1 + side)
+            rect_area = (x2 - x1) * (y2 - y1)
+
+            # Draw the live square
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 3)
+
+            # Show live area percentage
+            pct = rect_area / screen_area * 100
+            cv2.putText(frame, f"Area: {pct:.1f}%  (need >= 40%)",
+                        (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+            # Trigger snapshot when box covers >= 40% of screen
+            if rect_area >= 0.4 * screen_area:
+                original_img = frame[y1:y2, x1:x2].copy()
+                frozen_square = (x1, y1, x2, y2)
+                snapshot_timer = cv2.getTickCount()
+                print(f"Snapshot taken! Crop size: {original_img.shape[1]}x{original_img.shape[0]}")
+        else:
+            # Square is frozen — draw it at the locked position
+            x1, y1, x2, y2 = frozen_square
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
+    else:
+        cv2.putText(frame, "Show both hands fully open",
+                    (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+    # Show snapshot overlay for 2 seconds after capture
+    if snapshot_timer and (cv2.getTickCount() - snapshot_timer) < SNAPSHOT_DISPLAY_TICKS:
+        cv2.putText(frame, "SNAPSHOT TAKEN!",
+                    (50, frame.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX,
+                    1.5, (0, 255, 0), 4)
+
+    # Show the frame
+    cv2.imshow("Handy Puzzle Pal - Step 0 | The ML Guppy", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# ============================================================================
+# Cleanup
+# ============================================================================
+detector.close()
+cap.release()
+cv2.destroyAllWindows()
