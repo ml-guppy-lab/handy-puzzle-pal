@@ -19,15 +19,15 @@ HAND_CONNECTIONS = [
     (5,9),(9,13),(13,17),             # Palm
 ]
 
-def draw_hand_landmarks(frame, hand_landmarks):
+def draw_hand_landmarks(frame, hand_landmarks, color=(0, 200, 255)):
     """Draw hand skeleton on frame using OpenCV."""
     h, w = frame.shape[:2]
     pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
     for a, b in HAND_CONNECTIONS:
-        cv2.line(frame, pts[a], pts[b], (0, 200, 255), 2)
+        cv2.line(frame, pts[a], pts[b], color, 2)
     for x, y in pts:
         cv2.circle(frame, (x, y), 4, (255, 255, 255), -1)
-        cv2.circle(frame, (x, y), 4, (0, 150, 200), 1)
+        cv2.circle(frame, (x, y), 4, color, 1)
 
 # ============================================================================
 # Initialize Video Capture
@@ -119,6 +119,16 @@ def get_bounding_rect(all_hand_landmarks, frame_w, frame_h):
     ys = [int(lm.y * frame_h) for hand in all_hand_landmarks for lm in hand]
     return min(xs), min(ys), max(xs), max(ys)
 
+def get_pinch(hand_landmarks, frame_w, frame_h, threshold=30):
+    """Return (is_pinching, midpoint_px) for a single hand."""
+    thumb = hand_landmarks[4]
+    index = hand_landmarks[8]
+    tx, ty = int(thumb.x * frame_w), int(thumb.y * frame_h)
+    ix, iy = int(index.x * frame_w), int(index.y * frame_h)
+    dist = np.hypot(tx - ix, ty - iy)
+    mid = ((tx + ix) // 2, (ty + iy) // 2)
+    return dist < threshold, mid
+
 def make_puzzle(img):
     """Split img into a 3x3 grid, shuffle tiles, return assembled puzzle image."""
     # Resize to a multiple of 3 to ensure clean equal tiles
@@ -176,8 +186,17 @@ while True:
 
     # Draw landmarks on both hands (always on top of puzzle)
     if detection_result.hand_landmarks:
+        landmark_color = (0, 0, 255) if frozen_square is not None else (0, 200, 255)
+        h, w = frame.shape[:2]
         for hand_landmarks in detection_result.hand_landmarks:
-            draw_hand_landmarks(frame, hand_landmarks)
+            draw_hand_landmarks(frame, hand_landmarks, landmark_color)
+            # ── STEP 4: Pinch detection ──────────────────────────────────────
+            is_pinching, mid = get_pinch(hand_landmarks, w, h)
+            if is_pinching:
+                cv2.circle(frame, mid, 16, (0, 255, 255), -1)   # filled yellow dot
+                cv2.circle(frame, mid, 18, (0, 180, 180), 2)    # teal outline
+                cv2.putText(frame, "PINCH", (mid[0] + 20, mid[1] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
     # ── Hand gesture UI (only when no snapshot yet) ───────────────────────
     if frozen_square is None:

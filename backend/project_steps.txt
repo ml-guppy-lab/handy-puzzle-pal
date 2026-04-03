@@ -27,10 +27,10 @@ Step 3: Turn snapshot into 3x3 shuffled puzzle
 
 Step 4: Detect pinch gesture (index + thumb close) (2 hours)
 
-Calculate distance between thumb tip (landmark 4) and index tip (landmark 8).
-If distance < 30 pixels → “pinch detected”.
-Add a small circle at the pinch point so you can see it.
-Reel: “Pinch = click. No mouse needed!”
+* Calculate distance between thumb tip (landmark 4) and index tip (landmark 8).
+* If distance < 30 pixels → “pinch detected”.
+* Add a small circle at the pinch point so you can see it.
+----Reel: “Pinch = click. No mouse needed!”
 
 Step 5: Build drag-and-drop puzzle logic (3–4 hours – the fun part)
 
